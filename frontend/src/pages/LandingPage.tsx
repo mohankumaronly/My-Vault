@@ -90,7 +90,7 @@ const FAQS = [
   },
 ];
 
-const SELF_HOST_SNIPPET = `git clone https://github.com/your-username/My-Vault.git
+const SELF_HOST_SNIPPET = `git clone https://github.com/mohankumaronly/My-Vault.git
 cd My-Vault
 cp backend/.env.example backend/.env
 docker compose up -d`;
