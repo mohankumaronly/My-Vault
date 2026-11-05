@@ -73,6 +73,13 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setCredentials([]);
     setUnlockExpiresAt(null);
     setCsrfToken(null);
+
+    // Clear persistent session data on lock
+    sessionStorage.removeItem("vault_dek");
+    sessionStorage.removeItem("vault_csrf");
+    sessionStorage.removeItem("vault_id");
+    sessionStorage.removeItem("vault_salt");
+    sessionStorage.removeItem("vault_enc_version");
   }, []);
 
   const refreshStatus = useCallback(async () => {
@@ -139,6 +146,14 @@ export function VaultProvider({ children }: { children: ReactNode }) {
       setVaultId(vaultIdValue);
       setCsrfToken(csrfToken);
       setStatus("unlocked");
+
+      // Save to sessionStorage so it survives page refreshes
+      sessionStorage.setItem("vault_dek", bytesToBase64(dek));
+      sessionStorage.setItem("vault_csrf", csrfToken);
+      sessionStorage.setItem("vault_id", vaultIdValue);
+      sessionStorage.setItem("vault_salt", saltB64);
+      sessionStorage.setItem("vault_enc_version", encryptionVersion.toString());
+
       await decryptAll(vaultIdValue, key);
     },
     [decryptAll]
@@ -282,9 +297,56 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     [vaultId]
   );
 
+  // UPDATED: Session restoration on refresh
   useEffect(() => {
-    void refreshStatus();
-  }, [refreshStatus]);
+    const initSession = async () => {
+      const savedDek = sessionStorage.getItem("vault_dek");
+      const savedCsrf = sessionStorage.getItem("vault_csrf");
+      const savedId = sessionStorage.getItem("vault_id");
+      const savedSalt = sessionStorage.getItem("vault_salt");
+      const savedEncVer = sessionStorage.getItem("vault_enc_version");
+
+      if (savedDek && savedCsrf && savedId && savedSalt && savedEncVer) {
+        try {
+          // 1. Restore the CSRF token immediately
+          setCsrfToken(savedCsrf);
+          
+          // 2. Rebuild the CryptoKey from storage
+          const dekBytes = base64ToBytes(savedDek);
+          const key = await dekToCryptoKey(dekBytes);
+          
+          // 3. Restore React memory
+          sessionRef.current = {
+            dekKey: key,
+            saltB64: savedSalt,
+            encryptionVersion: parseInt(savedEncVer, 10),
+          };
+          setVaultId(savedId);
+          setStatus("unlocked");
+          lastActivityRef.current = Date.now();
+          hardCapRef.current = Date.now() + MAX_SESSION_MS;
+          setUnlockExpiresAt(hardCapRef.current);
+          
+          // 4. Fetch credentials (this verifies the backend cookie is still valid)
+          await decryptAll(savedId, key);
+          return; 
+        } catch (err) {
+          // If cookie expired or decryption failed, clear everything and force unlock
+          console.warn("Session restore failed, forcing lock.");
+          sessionStorage.removeItem("vault_dek");
+          sessionStorage.removeItem("vault_csrf");
+          sessionStorage.removeItem("vault_id");
+          sessionStorage.removeItem("vault_salt");
+          sessionStorage.removeItem("vault_enc_version");
+        }
+      }
+      
+      // Fallback: Check if vault exists, then lock
+      await refreshStatus();
+    };
+
+    void initSession();
+  }, [decryptAll, refreshStatus]);
 
   useEffect(() => {
     if (status !== "unlocked") return;

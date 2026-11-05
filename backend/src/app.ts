@@ -17,7 +17,7 @@ const allowedOrigins = [env.CLIENT_ORIGIN];
 export function createApp() {
   const app = express();
 
-  // Trust proxy (needed for rate-limiting behind Docker/Nginx).
+  // Trust proxy (needed for rate-limiting behind Docker/Nginx/Render/Vercel).
   app.set("trust proxy", 1);
 
   app.use(helmet());
@@ -46,7 +46,14 @@ export function createApp() {
 
   // Session-aware middleware for all API routes.
   api.use(attachSession);
-  api.use(csrfProtection);
+  
+  // UPDATED: Apply CSRF protection, but SKIP it for login/setup routes
+  api.use((req, res, next) => {
+    if (req.path === "/vault/unlock" || req.path === "/vault/setup") {
+      return next();
+    }
+    return csrfProtection(req, res, next);
+  });
 
   // CSRF token retrieval for the current session.
   api.get("/csrf", (req, res) => {
