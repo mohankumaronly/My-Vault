@@ -1,0 +1,39 @@
+# ── Dependencies & build output ──────────────────────────
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# ── Env / secrets — MUST NOT be baked into the image ─────
+.env
+.env.*
+!.env.example
+
+# ── VCS & editor ─────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# ── Logs ─────────────────────────────────────────────────
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# ── Docker meta ──────────────────────────────────────────
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# ── Docs & misc ──────────────────────────────────────────
+README.md
+*.md
+LICENSE
+
+# ── Local helper scripts (not needed at runtime) ─────────
+scripts

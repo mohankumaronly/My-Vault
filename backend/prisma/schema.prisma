@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Single-row vault configuration. Only one vault exists per deployment.
+model Vault {
+  id                String   @id @default(uuid())
+  kdfAlgorithm      String   @default("ARGON2ID")
+  kdfMemoryKiB      Int      @default(65536)
+  kdfIterations     Int      @default(3)
+  kdfParallelism    Int      @default(4)
+  kdfOutputLength   Int      @default(64)
+  salt              String
+  keyEncryptionAlgo String   @default("AES-256-GCM")
+  wrappedVaultKey   String
+  keyNonce          String
+  encryptionVersion Int      @default(1)
+  authVerifierHash  String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  credentials Credential[]
+  sessions    Session[]
+  auditLogs   AuditLog[]
+
+  @@map("vaults")
+}
+
+model Credential {
+  id                String   @id @default(uuid())
+  vaultId           String
+  ciphertext        String
+  nonce             String
+  encryptionVersion Int      @default(1)
+  recordVersion     Int      @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  vault Vault @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+
+  @@index([vaultId])
+  @@map("credentials")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  vaultId   String
+  tokenHash String   @unique
+  csrfToken String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  vault Vault @relation(fields: [vaultId], references: [id], onDelete: Cascade)
+
+  @@index([vaultId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  vaultId   String?
+  action    String
+  metadata  Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  vault Vault? @relation(fields: [vaultId], references: [id], onDelete: SetNull)
+
+  @@index([vaultId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

@@ -1,17 +1,44 @@
 {
-  "name": "backend",
+  "name": "my-vault-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "description": "My-Vault zero-knowledge password manager backend",
+  "main": "dist/server.js",
   "type": "commonjs",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:push": "prisma db push",
+    "postman:export": "node scripts/export-postman.js"
+  },
+  "keywords": [
+    "vault",
+    "password-manager",
+    "zero-knowledge"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@prisma/client": "^6.5.0",
+    "argon2": "^0.41.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^7.5.0",
+    "hash-wasm": "^4.12.0",
+    "helmet": "^8.1.0",
+    "zod": "^3.24.4"
+  },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.8",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
     "@types/node": "^26.6.6",
+    "prisma": "^6.5.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
