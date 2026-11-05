@@ -1,0 +1,768 @@
+# My-Vault – Production-Ready Full-Stack Documentation
+
+**Stack:** React 19 + Tailwind CSS v4 + Vite (frontend) · Node.js 24 + Express 5 + TypeScript (backend) · PostgreSQL + Prisma · Docker (backend only) · Postman
+
+> **Core principle:** The master key never leaves the browser. The server stores only a salted Argon2id hash of the derived auth verifier, the wrapped DEK, and encrypted credential records. There is no email, no application login password, and no admin approval — the master key is the only credential.
+
+---
+
+## 1. Updated technology stack
+
+| Layer | Technology | Version note |
+| --- | --- | --- |
+| Frontend framework | React + TypeScript | React 19 |
+| Build tool | Vite | Latest |
+| Styling | Tailwind CSS v4 | **No `tailwind.config.js` needed** — use `@tailwindcss/vite` plugin and `@import "tailwindcss"` in `index.css` |
+| UI components | shadcn/ui + Radix primitives | Optional but recommended for SaaS polish |
+| Backend runtime | Node.js 24 | Your current version |
+| Backend framework | Express 5 + TypeScript | Production-grade layered architecture |
+| Database | PostgreSQL | |
+| ORM | Prisma | |
+| Validation | Zod | |
+| Master-key hashing (auth verifier) | Argon2id | Server-side hash of the client-derived verifier |
+| Vault encryption | Web Crypto API — AES-256-GCM | |
+| Key derivation | Argon2id (client-side, WASM) | 64-byte output → 32-byte KEK + 32-byte auth verifier |
+| Sessions | HTTP-only secure cookies + server-side sessions | Created only after master-key verification |
+| Rate limiting | `express-rate-limit` | |
+| Testing | Postman + Newman | Collection JSON provided below |
+| Deployment | Docker (backend) + static frontend hosting | |
+
+---
+
+## 2. Project structure (matching your existing layout)
+
+```
+My-Vault/
+├── README.md
+├── Documentations/
+│   └── Application documentation.md
+│
+├── backend/
+│   ├── .env
+│   ├── .env.example
+│   ├── .dockerignore
+│   ├── Dockerfile                 # ← backend only
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── prisma/
+│   │   ├── schema.prisma
+│   │   └── migrations/
+│   └── src/
+│       ├── config/
+│       │   └── env.ts             # validates process.env with Zod
+│       ├── common/
+│       │   ├── errors/
+│       │   │   └── AppError.ts
+│       │   ├── middleware/
+│       │   │   ├── errorHandler.ts
+│       │   │   ├── sessionMiddleware.ts
+│       │   │   ├── csrfProtection.ts
+│       │   │   ├── rateLimit.ts
+│       │   │   ├── validateRequest.ts
+│       │   │   └── testApiKey.ts   # ← Postman / test API key
+│       │   └── utils/
+│       │       └── cookies.ts
+│       ├── modules/
+│       │   ├── vault/
+│       │   │   ├── vault.routes.ts
+│       │   │   ├── vault.controller.ts
+│       │   │   ├── vault.service.ts
+│       │   │   ├── vault.repository.ts
+│       │   │   ├── vault.validation.ts
+│       │   │   └── vault.types.ts
+│       │   ├── credentials/
+│       │   │   ├── credential.routes.ts
+│       │   │   ├── credential.controller.ts
+│       │   │   ├── credential.service.ts
+│       │   │   ├── credential.repository.ts
+│       │   │   └── credential.validation.ts
+│       │   ├── session/
+│       │   │   ├── session.service.ts
+│       │   │   └── session.repository.ts
+│       │   └── audit/
+│       │       └── audit.service.ts
+│       ├── app.ts                 # Express app configuration
+│       └── server.ts              # entry point, starts listener
+│
+└── frontend/
+    ├── .env
+    ├── .env.example
+    ├── index.html
+    ├── package.json
+    ├── vite.config.ts
+    ├── tsconfig.json
+    ├── tsconfig.app.json
+    ├── tsconfig.node.json
+    └── src/
+        ├── main.tsx
+        ├── App.tsx
+        ├── index.css              # @import "tailwindcss";
+        ├── router.tsx
+        ├── layouts/
+        │   ├── MarketingLayout.tsx
+        │   └── AppLayout.tsx
+        ├── pages/
+        │   ├── LandingPage.tsx
+        │   ├── SetupVaultPage.tsx
+        │   ├── UnlockVaultPage.tsx
+        │   └── DashboardPage.tsx
+        ├── features/
+        │   ├── vault/
+        │   │   ├── components/
+        │   │   ├── hooks/
+        │   │   └── services/
+        │   └── credentials/
+        │       ├── components/
+        │       ├── hooks/
+        │       └── services/
+        ├── components/
+        │   ├── ui/                # shadcn/ui primitives
+        │   └── shared/
+        ├── crypto/
+        │   ├── argon2.ts
+        │   ├── aes.ts
+        │   ├── vaultKey.ts
+        │   └── secureMemory.ts
+        ├── services/
+        │   └── api.ts             # fetch wrapper with credentials: "include"
+        ├── contexts/
+        │   └── VaultContext.tsx
+        ├── hooks/
+        │   └── useAutoLock.ts
+        ├── types/
+        └── utils/
+```
+
+The backend follows a **layered architecture**: routes → controller → service → repository. The frontend uses **feature-based organization** to keep each domain's UI, hooks, and services together.
+
+---
+
+## 3. Environment variables
+
+### 3.1 Backend `.env.example`
+
+```env
+# ── Runtime ──────────────────────────────────────────────
+NODE_ENV=development
+PORT=5000
+
+# ── Database ─────────────────────────────────────────────
+DATABASE_URL=postgresql://app_user:change_me@localhost:5432/my_vault
+
+# ── Frontend origin (CORS) ───────────────────────────────
+CLIENT_ORIGIN=http://localhost:5173
+
+# ── Session ──────────────────────────────────────────────
+SESSION_SECRET=replace_with_64_byte_hex_random
+SESSION_DURATION_MINUTES=30
+COOKIE_NAME=my_vault_session
+COOKIE_SECURE=false          # true in production (HTTPS)
+COOKIE_SAME_SITE=strict
+
+# ── Test API key (Postman / Newman) ─────────────────────
+# When TEST_MODE=true, requests carrying this key bypass CSRF
+# and receive relaxed rate limits. NEVER enable in production.
+TEST_MODE=true
+TEST_API_KEY=test_sk_generate_a_random_hex_string_here
+```
+
+Generate the secrets:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+### 3.2 Frontend `.env.example`
+
+```env
+VITE_API_BASE_URL=http://localhost:5000/api/v1
+VITE_APP_NAME=My-Vault
+VITE_GITHUB_URL=https://github.com/your-username/My-Vault
+```
+
+> **Never** put secrets in `VITE_` variables — they are bundled into client JavaScript and are public.
+
+---
+
+## 4. Master-key access flow (the only authentication)
+
+### 4.1 Vault setup (first run)
+
+1. `GET /api/v1/vault/metadata` → `404` if no vault exists.
+2. Browser generates a random 16-byte salt.
+3. Browser runs Argon2id with the user's master key, producing **64 bytes**:
+   - `bytes[0..31]` → **KEK** (wraps the DEK)
+   - `bytes[32..63]` → **auth verifier** (sent to server)
+4. Browser generates a random 256-bit DEK and wraps it with the KEK using AES-256-GCM.
+5. Browser calls `POST /vault/setup` with `salt`, `kdfParameters`, `wrappedVaultKey`, `keyNonce`, and `authVerifier`.
+6. Server hashes `authVerifier` with Argon2id, stores the vault row, and creates a session cookie.
+7. Dashboard opens. The DEK stays in browser memory only.
+
+### 4.2 Unlock (subsequent visits)
+
+1. `GET /vault/metadata` → `200` with salt, KDF params, wrapped DEK.
+2. User enters the master key.
+3. Browser re-derives KEK + auth verifier.
+4. Browser attempts to unwrap the DEK. Failure → **wrong master key** (no request sent).
+5. Success → browser sends `POST /vault/unlock` with the auth verifier.
+6. Server verifies against the stored Argon2id hash, creates a session, sets cookie.
+7. Browser fetches encrypted credentials, decrypts locally, renders dashboard.
+
+**Recovery:** if the master key is lost, the DEK cannot be recovered. State this on the setup screen.
+
+---
+
+## 5. API endpoints
+
+Base path: `/api/v1`
+
+All responses use `{ success: boolean, message?: string, data?: any }`.
+
+### 5.1 Vault APIs
+
+| Method | Endpoint | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/vault/metadata` | Public | Return salt, KDF params, wrapped DEK, nonce. `404` if no vault. |
+| `POST` | `/vault/setup` | Public (only if no vault) | Create vault + open session. `409` if vault exists. |
+| `POST` | `/vault/unlock` | Public | Verify auth verifier + open session. `401` on failure. |
+| `POST` | `/vault/lock` | Session | End server session. |
+| `PUT` | `/vault/key-envelope` | Session | Update envelope after master-key change. |
+
+**`GET /vault/metadata` — 200**
+
+```json
+{
+  "success": true,
+  "data": {
+    "kdfAlgorithm": "ARGON2ID",
+    "kdfParameters": { "memoryKiB": 65536, "iterations": 3, "parallelism": 4, "outputLength": 64 },
+    "salt": "BASE64_SALT",
+    "keyEncryptionAlgo": "AES-256-GCM",
+    "wrappedVaultKey": "BASE64_WRAPPED_DEK",
+    "keyNonce": "BASE64_NONCE",
+    "encryptionVersion": 1
+  }
+}
+```
+
+**`POST /vault/setup` — request**
+
+```json
+{
+  "kdfAlgorithm": "ARGON2ID",
+  "kdfParameters": { "memoryKiB": 65536, "iterations": 3, "parallelism": 4, "outputLength": 64 },
+  "salt": "BASE64_SALT",
+  "keyEncryptionAlgo": "AES-256-GCM",
+  "wrappedVaultKey": "BASE64_WRAPPED_DEK",
+  "keyNonce": "BASE64_NONCE",
+  "authVerifier": "BASE64_AUTH_VERIFIER",
+  "encryptionVersion": 1
+}
+```
+
+**`POST /vault/unlock` — request**
+
+```json
+{ "authVerifier": "BASE64_AUTH_VERIFIER" }
+```
+
+### 5.2 Credential APIs (session required)
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `POST` | `/credentials` | Create encrypted credential |
+| `GET` | `/credentials` | List encrypted credentials |
+| `GET` | `/credentials/:id` | Get one encrypted credential |
+| `PUT` | `/credentials/:id` | Update with optimistic concurrency |
+| `DELETE` | `/credentials/:id` | Delete |
+
+**Create — request**
+
+```json
+{
+  "ciphertext": "BASE64_ENCRYPTED_CREDENTIAL",
+  "nonce": "BASE64_NONCE",
+  "encryptionVersion": 1
+}
+```
+
+**Update — request** (includes `expectedRecordVersion`)
+
+```json
+{
+  "ciphertext": "BASE64_NEW_CIPHERTEXT",
+  "nonce": "BASE64_NEW_NONCE",
+  "encryptionVersion": 1,
+  "expectedRecordVersion": 1
+}
+```
+
+Return `409` when `expectedRecordVersion` does not match.
+
+### 5.3 CSRF + test endpoints
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/csrf` | Return CSRF token for session-authenticated state-changing requests |
+| `GET` | `/health` | Health check (`{ success: true }`) — used by Docker health check |
+
+---
+
+## 6. API key types (for Postman testing)
+
+You asked for **different types of API keys** for testing. There are exactly **two** in this application:
+
+| Key type | Where it lives | What it does |
+| --- | --- | --- |
+| **Master key** | User's head / browser memory | Derives the KEK and auth verifier. Never sent to the server. |
+| **Test API key** (`TEST_API_KEY`) | Backend `.env` + Postman environment | Sent as `X-Test-API-Key` header. **Only active when `TEST_MODE=true`.** Bypasses CSRF and relaxes rate limits so Postman/Newman can run tests quickly. |
+
+**Test API key middleware (`src/common/middleware/testApiKey.ts`):**
+
+```ts
+import { Request, Response, NextFunction } from "express";
+import { env } from "../../config/env";
+
+export function testApiKey(req: Request, res: Response, next: NextFunction) {
+  if (env.TEST_MODE !== "true") return next();
+
+  const key = req.header("X-Test-API-Key");
+  if (key && key === env.TEST_API_KEY) {
+    (req as any).isTestRequest = true;
+  }
+  next();
+}
+```
+
+Apply it globally in `app.ts`:
+
+```ts
+app.use(testApiKey);
+```
+
+Then in `csrfProtection`, skip CSRF when `req.isTestRequest` is true:
+
+```ts
+export function csrfProtection(req: Request, res: Response, next: NextFunction) {
+  if ((req as any).isTestRequest) return next(); // test API key bypass
+  // normal CSRF validation...
+}
+```
+
+> **Never** set `TEST_MODE=true` in production. The `.env.example` defaults to `true` for local development only.
+
+---
+
+## 7. CORS configuration
+
+The frontend and backend run on different ports in development, so CORS must allow the frontend origin and credentials (cookies).
+
+`src/app.ts`:
+
+```ts
+import cors from "cors";
+import { env } from "./config/env";
+
+const allowedOrigins = [env.CLIENT_ORIGIN];
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token", "X-Test-API-Key"],
+  })
+);
+```
+
+Key rules:
+
+- **Never** use `origin: "*"` with `credentials: true` — browsers reject it, and it is a security risk.
+- Use an explicit allowlist checked on every request.
+- In production, set `CLIENT_ORIGIN` to your exact deployed frontend URL (e.g. `https://vault.example.com`).
+- `app.options("*", cors())` is not needed when the middleware is applied globally before routes.
+
+---
+
+## 8. Backend Dockerfile (backend only)
+
+`backend/Dockerfile` — multi-stage build with a non-root user, `tini` for signal handling, and a health check:
+
+```dockerfile
+# syntax=docker/dockerfile:1
+
+# ── Stage 1: production dependencies ─────────────────────
+FROM node:24-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev --no-audit --no-fund
+
+# ── Stage 2: build TypeScript ────────────────────────────
+FROM node:24-alpine AS builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund
+COPY tsconfig.json ./
+COPY prisma ./prisma
+RUN npx prisma generate
+COPY src ./src
+RUN npm run build
+
+# ── Stage 3: runtime ─────────────────────────────────────
+FROM node:24-alpine AS runner
+WORKDIR /app
+RUN apk add --no-cache tini
+ENV NODE_ENV=production
+
+RUN addgroup --system --gid 1001 appgroup \
+ && adduser  --system --uid 1001 --ingroup appgroup appuser
+
+COPY --from=deps    --chown=appuser:appgroup /app/node_modules ./node_modules
+COPY --from=builder --chown=appuser:appgroup /app/dist        ./dist
+COPY --from=builder --chown=appuser:appgroup /app/prisma      ./prisma
+COPY --chown=appuser:appgroup package.json ./
+
+USER appuser
+EXPOSE 5000
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=30s \
+  CMD ["node", "-e", "fetch('http://localhost:5000/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "dist/server.js"]
+```
+
+`.dockerignore` (backend):
+
+```
+node_modules
+dist
+.env
+*.log
+```
+
+Build and run:
+
+```bash
+cd backend
+docker build -t my-vault-backend .
+docker run --env-file .env -p 5000:5000 my-vault-backend
+```
+
+For local development with a database, use Docker Compose with `postgres` and the backend service; the frontend runs separately with `npm run dev`.
+
+---
+
+## 9. Production scripts (`backend/package.json`)
+
+```json
+{
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "postman:export": "node scripts/export-postman.js"
+  }
+}
+```
+
+In production, run `npm run prisma:deploy` (not `migrate dev`).
+
+---
+
+## 10. Postman collection (import-ready JSON)
+
+Save the following as `My-Vault.postman_collection.json` and import it into Postman. It includes the **test API key** header and covers the full flow.
+
+```json
+{
+  "info": {
+    "name": "My-Vault API",
+    "description": "Master-key-only password manager. Use X-Test-API-Key when TEST_MODE=true.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",    "value": "http://localhost:5000/api/v1" },
+    { "key": "testApiKey", "value": "test_sk_replace_me" },
+    { "key": "authVerifier", "value": "BASE64_AUTH_VERIFIER_FROM_TEST_CLIENT" },
+    { "key": "credentialId", "value": "" },
+    { "key": "csrfToken",    "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": "{{baseUrl}}/health" }
+    },
+    {
+      "name": "Get vault metadata",
+      "request": { "method": "GET", "url": "{{baseUrl}}/vault/metadata" }
+    },
+    {
+      "name": "Setup vault (only if 404)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Test-API-Key", "value": "{{testApiKey}}" }
+        ],
+        "url": "{{baseUrl}}/vault/setup",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"kdfAlgorithm\": \"ARGON2ID\",\n  \"kdfParameters\": { \"memoryKiB\": 65536, \"iterations\": 3, \"parallelism\": 4, \"outputLength\": 64 },\n  \"salt\": \"BASE64_SALT\",\n  \"keyEncryptionAlgo\": \"AES-256-GCM\",\n  \"wrappedVaultKey\": \"BASE64_WRAPPED_DEK\",\n  \"keyNonce\": \"BASE64_NONCE\",\n  \"authVerifier\": \"{{authVerifier}}\",\n  \"encryptionVersion\": 1\n}"
+        }
+      }
+    },
+    {
+      "name": "Unlock vault",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Test-API-Key", "value": "{{testApiKey}}" }
+        ],
+        "url": "{{baseUrl}}/vault/unlock",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"authVerifier\": \"{{authVerifier}}\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Get CSRF token",
+      "request": { "method": "GET", "url": "{{baseUrl}}/csrf" }
+    },
+    {
+      "name": "Create credential",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Test-API-Key", "value": "{{testApiKey}}" }
+        ],
+        "url": "{{baseUrl}}/credentials",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ciphertext\": \"BASE64_TEST_CIPHERTEXT\",\n  \"nonce\": \"BASE64_TEST_NONCE\",\n  \"encryptionVersion\": 1\n}"
+        }
+      }
+    },
+    {
+      "name": "List credentials",
+      "request": { "method": "GET", "url": "{{baseUrl}}/credentials" }
+    },
+    {
+      "name": "Get one credential",
+      "request": { "method": "GET", "url": "{{baseUrl}}/credentials/{{credentialId}}" }
+    },
+    {
+      "name": "Update credential (optimistic concurrency)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Test-API-Key", "value": "{{testApiKey}}" }
+        ],
+        "url": "{{baseUrl}}/credentials/{{credentialId}}",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ciphertext\": \"BASE64_NEW_CIPHERTEXT\",\n  \"nonce\": \"BASE64_NEW_NONCE\",\n  \"encryptionVersion\": 1,\n  \"expectedRecordVersion\": 1\n}"
+        }
+      }
+    },
+    {
+      "name": "Delete credential",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          { "key": "X-Test-API-Key", "value": "{{testApiKey}}" }
+        ],
+        "url": "{{baseUrl}}/credentials/{{credentialId}}"
+      }
+    },
+    {
+      "name": "Lock vault",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "X-Test-API-Key", "value": "{{testApiKey}}" }
+        ],
+        "url": "{{baseUrl}}/vault/lock"
+      }
+    }
+  ]
+}
+```
+
+**How to use the collection:**
+
+1. Set `testApiKey` to the value of `TEST_API_KEY` in `backend/.env`.
+2. Generate a test `authVerifier` using the frontend crypto service or a small Node script (do **not** paste a real master key into Postman).
+3. Run the requests in order. The collection will work with `TEST_MODE=true` because CSRF is bypassed.
+
+To export a collection from Postman manually: Collections → **…** → **More** → **Export** → **Export JSON**.
+
+---
+
+## 11. Frontend design — professional SaaS look
+
+### 11.1 Landing page sections
+
+Build the landing page with these sections (all responsive with Tailwind v4 utility classes and the `@theme` tokens in `index.css`):
+
+1. **Navbar** — logo, links (Features, Security, GitHub, Docs), CTA “Open Vault”.
+2. **Hero** — headline, subheadline, primary CTA (“Get Started — it's free”), secondary CTA (“View on GitHub”), product screenshot / mockup.
+3. **Trust bar** — “AES-256-GCM · Argon2id · Zero-knowledge · Open source”.
+4. **Features grid** — 3–6 cards: client-side encryption, master-key-only access, auto-lock, self-hostable, no email required, open source.
+5. **How it works** — 3 steps: Create master key → Add credentials → Unlock anytime.
+6. **Security section** — explain the crypto flow in plain language; link to the documentation.
+7. **Self-hosting section** — `git clone` + `docker compose up` snippet; link to GitHub.
+8. **FAQ** — “What happens if I forget my master key?”, “Is my data sent to a server?”, “Can I self-host?”.
+9. **Footer** — GitHub link, documentation, license (MIT).
+
+### 11.2 Design tokens (`src/index.css`)
+
+Tailwind v4 uses CSS-first configuration — no `tailwind.config.js`:
+
+```css
+@import "tailwindcss";
+
+@theme {
+  --color-brand-50:  oklch(0.97 0.02 250);
+  --color-brand-500: oklch(0.55 0.18 250);
+  --color-brand-600: oklch(0.48 0.19 250);
+  --color-surface:   oklch(0.99 0.005 250);
+  --color-ink:       oklch(0.18 0.02 250);
+  --radius-card:     1rem;
+  --font-sans:       "Inter", system-ui, sans-serif;
+}
+```
+
+### 11.3 Component patterns
+
+- Use **shadcn/ui** primitives (`Button`, `Card`, `Input`, `Dialog`) for consistency.
+- Use the `cn()` utility (`clsx` + `tailwind-merge`) for conditional classes.
+- Keep the dashboard minimal: search bar, “Add credential” button, credential list with masked passwords, reveal/copy/edit/delete actions, lock button.
+- **Dark mode**: use `class`-based dark mode with `@custom-variant dark (&:is(.dark *))` and a theme toggle.
+
+### 11.4 Responsive breakpoints
+
+Use Tailwind's default breakpoints (`sm`, `md`, `lg`, `xl`). The dashboard should collapse to a single column on mobile, with the credential list becoming full-width cards.
+
+---
+
+## 12. Self-hosting guide (README section)
+
+Include this in your GitHub `README.md` so anyone can self-host for free:
+
+```markdown
+## Self-hosting
+
+### Prerequisites
+- Docker + Docker Compose
+- Node.js 24+ (for local frontend dev)
+
+### 1. Clone the repo
+git clone https://github.com/your-username/My-Vault.git
+cd My-Vault
+
+### 2. Start PostgreSQL
+docker compose up -d postgres
+
+### 3. Backend
+cd backend
+cp .env.example .env
+# edit .env — set DATABASE_URL, SESSION_SECRET, TEST_API_KEY
+npm install
+npx prisma migrate deploy
+npm run dev        # or: docker build -t my-vault-backend . && docker run --env-file .env -p 5000:5000 my-vault-backend
+
+### 4. Frontend
+cd ../frontend
+cp .env.example .env
+# set VITE_API_BASE_URL=http://localhost:5000/api/v1
+npm install
+npm run dev
+
+### 5. Production
+- Build the frontend: `npm run build` → deploy `dist/` to any static host (Vercel, Netlify, Nginx).
+- Build the backend: `docker build -t my-vault-backend ./backend`
+- Set `CLIENT_ORIGIN` to your deployed frontend URL and `COOKIE_SECURE=true`.
+- Run `npx prisma migrate deploy` before starting the backend.
+```
+
+**Docker Compose (development)**
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: change_me
+      POSTGRES_DB: my_vault
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    ports:
+      - "5000:5000"
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
+```
+
+---
+
+## 13. Security checklist (V1)
+
+- [ ] Master key never reaches the backend.
+- [ ] KEK and unwrapped DEK never leave the browser.
+- [ ] Server stores only an Argon2id hash of the auth verifier.
+- [ ] `POST /vault/setup` returns `409` if a vault already exists.
+- [ ] AES-256-GCM with a fresh 12-byte nonce per encryption.
+- [ ] AAD binds ciphertext to credential ID + vault ID + encryption version.
+- [ ] Session cookies: `HttpOnly`, `Secure` (production), `SameSite=Strict`.
+- [ ] CSRF protection on all state-changing session requests (bypassed only by `X-Test-API-Key` when `TEST_MODE=true`).
+- [ ] Rate limiting on `/vault/unlock` and `/vault/setup`.
+- [ ] CORS allowlist — never `origin: "*"` with credentials.
+- [ ] `TEST_MODE=false` in production.
+- [ ] Auto-lock after 3 minutes inactivity; max unlock 5 minutes.
+- [ ] Refresh requires re-entering the master key.
+- [ ] No decrypted data in `localStorage`, `sessionStorage`, IndexedDB, or cookies.
+- [ ] No secrets in logs or error responses.
+- [ ] Database backups tested.
+
+---
+
+## 14. Acceptance checklist
+
+- [ ] User can set up a vault with a master key and reach the dashboard.
+- [ ] On return visits, only the master key is required.
+- [ ] Wrong master key fails without contacting the server.
+- [ ] Dashboard shows platform names and masked passwords; reveal and copy work.
+- [ ] Search runs locally on decrypted records.
+- [ ] Edit uses optimistic concurrency (`expectedRecordVersion`); stale updates get `409`.
+- [ ] Delete asks for confirmation.
+- [ ] Manual lock and logout end the server session.
+- [ ] Page refresh locks the vault.
+- [ ] Landing page is responsive and matches the SaaS design spec.
+- [ ] GitHub README explains self-hosting with Docker + frontend build.
+- [ ] Postman collection imports and runs successfully with `TEST_MODE=true`.
